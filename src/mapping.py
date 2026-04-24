@@ -1075,7 +1075,12 @@ def create_single_html_animated_metric_map(
     day_string: str,
     default_metric: str = "pickups",
 ) -> folium.Map:
-    supported_test_metrics = ["pickups", "revenue"]
+    supported_test_metrics = [
+    "pickups",
+    "revenue",
+    "avg_fare",
+    "avg_trip_distance",
+]
 
     if default_metric not in supported_test_metrics:
         raise ValueError(
