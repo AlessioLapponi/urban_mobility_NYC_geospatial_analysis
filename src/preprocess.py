@@ -83,13 +83,17 @@ def build_daily_zone_summary(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
 def build_hourly_zone_summary(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     cfg = SUPPORTED_DATASETS[dataset]
     pu_col = cfg["pickup_zone"]
+    fare_col = cfg["fare_amount"]
     total_col = cfg["total_amount"]
+    distance_col = cfg["trip_distance"]
 
     summary = (
         df.groupby([pu_col, "pickup_hour"])
         .agg(
             pickups_count=(pu_col, "size"),
             total_revenue=(total_col, "sum"),
+            avg_fare=(fare_col, "mean"),
+            avg_trip_distance=(distance_col, "mean"),
         )
         .reset_index()
         .rename(columns={pu_col: "LocationID"})
