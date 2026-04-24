@@ -6,7 +6,7 @@ import branca.colormap as bcm
 
 from branca.element import MacroElement
 from jinja2 import Template
-from config import SUPPORTED_METRICS
+from config import SUPPORTED_METRICS, METRIC_HIGHLIGHT_COLORS
 from validate import validate_zone_columns
 
 class SingleOverlayControl(MacroElement):
@@ -96,21 +96,8 @@ def build_colormap(values: pd.Series, metric: str, metric_label: str):
     if vmax == 0:
         vmax = 1.0
 
-    # Special treatment for pickups:
-    # denser gradient below 1000, while keeping a continuous legend in raw units
-    if metric == "pickups":
-        raw_breaks = [0, 10, 25, 50, 100, 250, 500, 1000, vmax]
-
-        # keep only valid increasing breakpoints
-        raw_breaks = sorted(set(b for b in raw_breaks if b <= vmax))
-        if raw_breaks[-1] != vmax:
-            raw_breaks.append(vmax)
-
-        if len(raw_breaks) < 2:
-            raw_breaks = [0, vmax]
-
-        # choose as many colors as needed
-        base_colors = [
+    metric_color_scales = {
+        "pickups": [
             "#f7fbff",
             "#e3eef9",
             "#c6dbef",
@@ -120,29 +107,104 @@ def build_colormap(values: pd.Series, metric: str, metric_label: str):
             "#2171b5",
             "#08519c",
             "#08306b",
-        ]
-        colors = base_colors[:len(raw_breaks)]
+        ],
+        "dropoffs": [
+            "#fcfbfd",
+            "#efedf5",
+            "#dadaeb",
+            "#bcbddc",
+            "#9e9ac8",
+            "#807dba",
+            "#6a51a3",
+            "#54278f",
+            "#3f007d",
+        ],
+        "revenue": [
+            "#f7fcf5",
+            "#e5f5e0",
+            "#c7e9c0",
+            "#a1d99b",
+            "#74c476",
+            "#41ab5d",
+            "#238b45",
+            "#006d2c",
+            "#00441b",
+        ],
+        "avg_fare": [
+            "#fff5eb",
+            "#fee6ce",
+            "#fdd0a2",
+            "#fdae6b",
+            "#fd8d3c",
+            "#f16913",
+            "#d94801",
+            "#a63603",
+            "#7f2704",
+        ],
+        "avg_trip_distance": [
+            "#fff5f0",
+            "#fee0d2",
+            "#fcbba1",
+            "#fc9272",
+            "#fb6a4a",
+            "#ef3b2c",
+            "#cb181d",
+            "#a50f15",
+            "#67000d",
+        ],
+    }
+
+    colors = metric_color_scales.get(metric, metric_color_scales["pickups"])
+
+    # Keep enhanced contrast for pickups below 1000
+    if metric == "pickups":
+        raw_breaks = [0, 10, 25, 50, 100, 250, 500, 1000, vmax]
+        raw_breaks = sorted(set(b for b in raw_breaks if b <= vmax))
+        if raw_breaks[-1] != vmax:
+            raw_breaks.append(vmax)
+
+        if len(raw_breaks) < 2:
+            raw_breaks = [0, vmax]
+
+        colors = colors[:len(raw_breaks)]
 
         colormap = bcm.LinearColormap(
             colors=colors,
             index=raw_breaks,
             vmin=raw_breaks[0],
             vmax=raw_breaks[-1],
-            caption=f"{metric_label} (enhanced contrast below 1000)",
+            caption=""
         )
 
     else:
-        # standard continuous scale for other metrics
-        vmin = float(values.min())
-        if vmin == vmax:
-            vmax = vmin + 1.0
+        values_non_null = values.dropna()
 
-        colormap = bcm.LinearColormap(
-            colors=["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
-            vmin=vmin,
-            vmax=vmax,
-            caption=metric_label,
-        )
+        if len(values_non_null) == 0:
+            vmin, vmax = 0.0, 1.0
+            colormap = bcm.LinearColormap(
+                colors=colors,
+                vmin=vmin,
+                vmax=vmax,
+                caption=""
+            )
+        else:
+            quantiles = values_non_null.quantile([0, 0.2, 0.4, 0.6, 0.8, 1.0]).tolist()
+            quantiles = sorted(set(float(q) for q in quantiles))
+
+            if len(quantiles) < 2:
+                quantiles = [float(values_non_null.min()), float(values_non_null.max())]
+                if quantiles[0] == quantiles[1]:
+                    quantiles[1] = quantiles[0] + 1.0
+
+            usable_colors = colors[:len(quantiles)]
+
+            colormap = bcm.LinearColormap(
+                colors=usable_colors,
+                index=quantiles,
+                vmin=quantiles[0],
+                vmax=quantiles[-1],
+                caption=""
+            )
 
     return colormap
 
@@ -236,13 +298,15 @@ def style_function_factory(metric_column: str, colormap):
 
     return style_function
 
+def highlight_function_factory(highlight_color: str):
+    def highlight_function(feature):
+        return {
+            "weight": 2.0,
+            "color": highlight_color,
+            "fillOpacity": 0.9,
+        }
 
-def highlight_function(feature):
-    return {
-        "weight": 2.0,
-        "color": "black",
-        "fillOpacity": 0.9,
-    }
+    return highlight_function
 
 
 def create_daily_zone_map(
@@ -333,6 +397,7 @@ def create_metric_layer(
 
     metric_column = SUPPORTED_METRICS[metric]["column"]
     metric_label = SUPPORTED_METRICS[metric]["label"]
+    highlight_color = METRIC_HIGHLIGHT_COLORS.get(metric, "#000000")
 
     zones_wgs84 = zones_gdf.to_crs(epsg=4326)
     colormap = build_colormap(zones_wgs84[metric_column], metric, metric_label)
@@ -354,7 +419,7 @@ def create_metric_layer(
             "Dropoffs:",
             "Total revenue:",
             "Average fare:",
-            "Average trip distance:",
+            "Avg trip distance from pickup zone:",
         ],
         localize=True,
         sticky=False,
@@ -372,7 +437,7 @@ def create_metric_layer(
     geojson = folium.GeoJson(
         zones_wgs84,
         style_function=style_function_factory(metric_column, colormap),
-        highlight_function=highlight_function,
+        highlight_function=highlight_function_factory(highlight_color),
         tooltip=tooltip,
         name=metric_label,
     )
@@ -380,6 +445,80 @@ def create_metric_layer(
     geojson.add_to(layer)
     return layer
 
+
+class MetricSelectorControl(MacroElement):
+    def __init__(self, metric_layers: dict, default_metric_label: str):
+        super().__init__()
+        self._name = "MetricSelectorControl"
+
+        layer_map_entries = []
+        radio_entries = []
+
+        for label, layer in metric_layers.items():
+            layer_map_entries.append(f'"{label}": {layer.get_name()}')
+            checked = "checked" if label == default_metric_label else ""
+            radio_entries.append(
+                f'''
+                <label style="display:block; margin-bottom:4px; cursor:pointer;">
+                    <input type="radio" name="metric_selector" value="{label}" {checked}>
+                    {label}
+                </label>
+                '''
+            )
+
+        layer_map_js = ",\n".join(layer_map_entries)
+        radio_html = "\n".join(radio_entries)
+
+        template_str = f"""
+        {{% macro html(this, kwargs) %}}
+        <div id="metric-selector-control" style="
+            position: fixed;
+            top: 30px;
+            right: 30px;
+            z-index: 9999;
+            background-color: white;
+            padding: 10px 12px;
+            border: 1px solid #999999;
+            border-radius: 6px;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.25);
+            font-size: 13px;
+            min-width: 200px;
+        ">
+            <div style="font-weight: bold; margin-bottom: 8px;">Displayed metric</div>
+            {radio_html}
+        </div>
+        {{% endmacro %}}
+
+        {{% macro script(this, kwargs) %}}
+        var metricLayers = {{
+            {layer_map_js}
+        }};
+
+        function switchMetricLayer(selectedLabel) {{
+            var map = {{{{this._parent.get_name()}}}};
+
+            for (var label in metricLayers) {{
+                var layer = metricLayers[label];
+                if (map.hasLayer(layer)) {{
+                    map.removeLayer(layer);
+                }}
+            }}
+
+            if (metricLayers[selectedLabel]) {{
+                map.addLayer(metricLayers[selectedLabel]);
+            }}
+        }}
+
+        var radioButtons = document.querySelectorAll('input[name="metric_selector"]');
+        radioButtons.forEach(function(radio) {{
+            radio.addEventListener('change', function() {{
+                switchMetricLayer(this.value);
+            }});
+        }});
+        {{% endmacro %}}
+        """
+
+        self._template = Template(template_str)
 
 def create_multi_metric_daily_map(
     zones_gdf: gpd.GeoDataFrame,
@@ -408,17 +547,17 @@ def create_multi_metric_daily_map(
     metric_layers = {}
 
     for metric in SUPPORTED_METRICS:
+        metric_label = SUPPORTED_METRICS[metric]["label"]
         layer = create_metric_layer(
             zones_gdf=zones_gdf,
             metric=metric,
             show=(metric == default_metric)
         )
         layer.add_to(base_map)
-        metric_layers[SUPPORTED_METRICS[metric]["label"]] = layer
+        metric_layers[metric_label] = layer
 
-    #add_single_overlay_control(base_map, metric_layers)
-
-    folium.LayerControl(collapsed=False).add_to(base_map)
+    default_metric_label = SUPPORTED_METRICS[default_metric]["label"]
+    base_map.add_child(MetricSelectorControl(metric_layers, default_metric_label))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     base_map.save(output_path)

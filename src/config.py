@@ -44,6 +44,14 @@ SUPPORTED_METRICS = {
     },
 }
 
+METRIC_HIGHLIGHT_COLORS = {
+    "pickups": "#08306b",
+    "dropoffs": "#7a0177",
+    "revenue": "#005a32",
+    "avg_fare": "#b15928",
+    "avg_trip_distance": "#99000d",
+}
+
 REQUIRED_ZONE_COLUMNS = [
     "LocationID",
     "zone",
