@@ -39,7 +39,7 @@ SUPPORTED_METRICS = {
         "column": "avg_fare",
     },
     "avg_trip_distance": {
-        "label": "Average Trip Distance",
+        "label": "Average Trip Distance from Pick up Zone",
         "column": "avg_trip_distance",
     },
 }

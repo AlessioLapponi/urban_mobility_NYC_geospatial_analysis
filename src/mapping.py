@@ -4,9 +4,42 @@ import pandas as pd
 import folium
 import branca.colormap as bcm
 
+from branca.element import MacroElement
+from jinja2 import Template
 from config import SUPPORTED_METRICS
 from validate import validate_zone_columns
 
+class SingleOverlayControl(MacroElement):
+    def __init__(self, metric_layers: dict):
+        super().__init__()
+        self._name = "SingleOverlayControl"
+        self.metric_layers = metric_layers
+
+        layer_js_map = ",\n".join(
+            f'"{label}": {layer.get_name()}'
+            for label, layer in metric_layers.items()
+        )
+
+        self._template = Template(f"""
+        {{% macro script(this, kwargs) %}}
+        var metricLayers = {{
+            {layer_js_map}
+        }};
+
+        {{this._parent.get_name()}}.on('overlayadd', function(e) {{
+            for (var key in metricLayers) {{
+                var layer = metricLayers[key];
+                if (layer !== e.layer && {{this._parent.get_name()}}.hasLayer(layer)) {{
+                    {{this._parent.get_name()}}.removeLayer(layer);
+                }}
+            }}
+        }});
+        {{% endmacro %}}
+        """)
+
+
+def add_single_overlay_control(base_map, metric_layers: dict):
+    base_map.add_child(SingleOverlayControl(metric_layers))
 
 def load_zones(shapefile_path: Path) -> gpd.GeoDataFrame:
     zones = gpd.read_file(shapefile_path)
@@ -253,7 +286,7 @@ def create_daily_zone_map(
             "Dropoffs:",
             "Total revenue:",
             "Average fare:",
-            "Average trip distance:",
+            "Avg trip distance from pick up zone:",
         ],
         localize=True,
         sticky=False,
@@ -282,6 +315,110 @@ def create_daily_zone_map(
     legend_title=metric_label
     )
     folium.LayerControl().add_to(base_map)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    base_map.save(output_path)
+
+    return base_map
+
+def create_metric_layer(
+    zones_gdf: gpd.GeoDataFrame,
+    metric: str,
+    show: bool = False
+) -> folium.FeatureGroup:
+    if metric not in SUPPORTED_METRICS:
+        raise ValueError(
+            f"Unsupported metric '{metric}'. Supported metrics: {list(SUPPORTED_METRICS.keys())}"
+        )
+
+    metric_column = SUPPORTED_METRICS[metric]["column"]
+    metric_label = SUPPORTED_METRICS[metric]["label"]
+
+    zones_wgs84 = zones_gdf.to_crs(epsg=4326)
+    colormap = build_colormap(zones_wgs84[metric_column], metric, metric_label)
+
+    tooltip = folium.GeoJsonTooltip(
+        fields=[
+            "zone",
+            "borough",
+            "pickups_count",
+            "dropoffs_count",
+            "total_revenue",
+            "avg_fare",
+            "avg_trip_distance",
+        ],
+        aliases=[
+            "Zone:",
+            "Borough:",
+            "Pickups:",
+            "Dropoffs:",
+            "Total revenue:",
+            "Average fare:",
+            "Average trip distance:",
+        ],
+        localize=True,
+        sticky=False,
+        labels=True,
+        style="""
+            background-color: white;
+            border: 1px solid #999999;
+            border-radius: 4px;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
+        """,
+    )
+
+    layer = folium.FeatureGroup(name=metric_label, show=show)
+
+    geojson = folium.GeoJson(
+        zones_wgs84,
+        style_function=style_function_factory(metric_column, colormap),
+        highlight_function=highlight_function,
+        tooltip=tooltip,
+        name=metric_label,
+    )
+
+    geojson.add_to(layer)
+    return layer
+
+
+def create_multi_metric_daily_map(
+    zones_gdf: gpd.GeoDataFrame,
+    output_path: Path,
+    default_metric: str = "pickups"
+) -> folium.Map:
+    if default_metric not in SUPPORTED_METRICS:
+        raise ValueError(
+            f"Unsupported default metric '{default_metric}'. Supported metrics: {list(SUPPORTED_METRICS.keys())}"
+        )
+
+    center = get_map_center(zones_gdf)
+
+    base_map = folium.Map(
+        location=center,
+        zoom_start=10,
+        tiles=None
+    )
+
+    folium.TileLayer(
+        tiles="CartoDB positron",
+        name="CartoDB Positron",
+        control=False
+    ).add_to(base_map)
+
+    metric_layers = {}
+
+    for metric in SUPPORTED_METRICS:
+        layer = create_metric_layer(
+            zones_gdf=zones_gdf,
+            metric=metric,
+            show=(metric == default_metric)
+        )
+        layer.add_to(base_map)
+        metric_layers[SUPPORTED_METRICS[metric]["label"]] = layer
+
+    #add_single_overlay_control(base_map, metric_layers)
+
+    folium.LayerControl(collapsed=False).add_to(base_map)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     base_map.save(output_path)
