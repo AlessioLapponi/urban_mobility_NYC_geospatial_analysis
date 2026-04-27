@@ -1,4 +1,4 @@
-from config import SUPPORTED_DATASETS, REQUIRED_ZONE_COLUMNS
+from .config import SUPPORTED_DATASETS, REQUIRED_ZONE_COLUMNS
 
 
 def get_required_trip_columns(dataset: str) -> list[str]:

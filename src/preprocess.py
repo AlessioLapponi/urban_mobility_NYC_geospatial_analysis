@@ -1,8 +1,8 @@
 from pathlib import Path
 import pandas as pd
 
-from config import SUPPORTED_DATASETS
-from validate import validate_dataset_name, validate_trip_columns
+from .config import SUPPORTED_DATASETS
+from .validate import validate_dataset_name, validate_trip_columns
 
 
 def load_required_trip_data(parquet_path: Path, dataset: str) -> pd.DataFrame:

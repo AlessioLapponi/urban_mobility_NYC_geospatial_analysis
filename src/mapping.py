@@ -7,8 +7,8 @@ import branca.colormap as bcm
 from folium.plugins import TimestampedGeoJson
 from branca.element import MacroElement
 from jinja2 import Template
-from config import SUPPORTED_METRICS, METRIC_HIGHLIGHT_COLORS
-from validate import validate_zone_columns
+from .config import SUPPORTED_METRICS, METRIC_HIGHLIGHT_COLORS
+from .validate import validate_zone_columns
 
 class SingleOverlayControl(MacroElement):
     def __init__(self, metric_layers: dict):

@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
+from app_backend import run_analysis
+
 import streamlit as st
+
+import streamlit.components.v1 as components
 
 
 # =========================
@@ -143,7 +147,7 @@ def render_screen_1() -> None:
         - an optional **dashboard**
         - an optional **Power BI-ready export**
 
-        In this first prototype, the UI logic is real, while output generation is still mocked.
+        The current version already generates the selected map outputs and provides the dashboard/export selection flow.
         """
     )
 
@@ -154,7 +158,7 @@ def render_screen_1() -> None:
 
 def render_screen_2() -> None:
     st.title(APP_TITLE)
-    st.subheader("Screen 2 — Analysis Setup")
+    st.subheader("Analysis Setup")
 
     st.markdown(
         "Choose the dataset, date, and which map outputs to generate. "
@@ -172,7 +176,15 @@ def render_screen_2() -> None:
         with col1:
             year = st.selectbox("Year", options=list(range(2022, 2027)), index=2)
         with col2:
-            month = st.selectbox("Month", options=list(range(1, 13)), index=0)
+            month = st.selectbox(
+                "Month",
+                options=list(range(1, 13)),
+                index=0,
+                format_func=lambda m: [
+                    "January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December"
+                ][m - 1],
+            )
         with col3:
             day = st.selectbox("Day", options=list(range(1, 32)), index=14)
 
@@ -213,7 +225,7 @@ def render_screen_2() -> None:
             st.write("Downloading/loading data...")
             st.write("Preparing summaries...")
             st.write("Generating selected maps...")
-            generated_outputs = mock_run_analysis(selection)
+            generated_outputs = run_analysis(selection)
             status.update(label="Analysis ready", state="complete")
 
         st.session_state.selection = selection
@@ -228,14 +240,14 @@ def render_screen_2() -> None:
 
 def render_screen_3() -> None:
     st.title(APP_TITLE)
-    st.subheader("Screen 3 — Outputs and Dashboard Options")
+    st.subheader("Outputs and Dashboard Options")
 
     selection: AnalysisSelection | None = st.session_state.selection
     generated_outputs: Dict[str, str] = st.session_state.generated_outputs
 
     if not st.session_state.analysis_ready or selection is None:
         st.warning("No analysis is ready yet. Please complete Screen 2 first.")
-        if st.button("Go to Screen 2"):
+        if st.button("Go to Analysis Setup"):
             go_to_screen(2)
         return
 
@@ -253,23 +265,42 @@ def render_screen_3() -> None:
 
     st.markdown("### Generated map outputs")
 
+    available_map_options = {}
+
     if "daily_static" in generated_outputs:
-        st.link_button(
-            "Open Daily Static Map",
-            url=f"file:///{Path(generated_outputs['daily_static']).resolve()}".replace("\\", "/"),
-            help="Placeholder link. Replace with real generated HTML later.",
-        )
+        daily_path = Path(generated_outputs["daily_static"])
+        if daily_path.exists():
+            available_map_options["Daily static map"] = daily_path
+        else:
+            st.error(f"Daily static map file not found: {daily_path}")
     else:
         st.caption("Daily static map not generated.")
 
     if "animated_hourly" in generated_outputs:
-        st.link_button(
-            "Open Animated Hourly Map",
-            url=f"file:///{Path(generated_outputs['animated_hourly']).resolve()}".replace("\\", "/"),
-            help="Placeholder link. Replace with real generated HTML later.",
-        )
+        animated_path = Path(generated_outputs["animated_hourly"])
+        if animated_path.exists():
+            available_map_options["Animated hourly map"] = animated_path
+        else:
+            st.error(f"Animated hourly map file not found: {animated_path}")
     else:
         st.caption("Animated hourly map not generated.")
+
+    if available_map_options:
+        selected_map_label = st.radio(
+            "Choose which generated map to display",
+            options=list(available_map_options.keys()),
+            horizontal=True,
+        )
+
+        selected_map_path = available_map_options[selected_map_label]
+
+        try:
+            html_content = selected_map_path.read_text(encoding="utf-8")
+            components.html(html_content, height=700, scrolling=True)
+        except Exception as e:
+            st.error(f"Could not load the selected map: {e}")
+    else:
+        st.info("No generated maps are currently available to display.")
 
     st.divider()
     st.markdown("### Dashboard generation")
@@ -297,9 +328,11 @@ def render_screen_3() -> None:
         st.info(st.session_state.dashboard_message)
 
     col1, col2 = st.columns(2)
+
     with col1:
         if st.button("Back to Setup"):
             go_to_screen(2)
+
     with col2:
         if st.button("Start Over"):
             for key in [

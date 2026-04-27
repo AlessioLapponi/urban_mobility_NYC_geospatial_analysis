@@ -2,7 +2,7 @@ from pathlib import Path
 from urllib.request import urlretrieve
 import pandas as pd
 
-from config import SUPPORTED_DATASETS
+from .config import SUPPORTED_DATASETS
 
 
 def build_tlc_url(dataset: str, year: int, month: int) -> str:
