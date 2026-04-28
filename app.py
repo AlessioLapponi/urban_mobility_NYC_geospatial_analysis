@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-from app_backend import run_analysis
+from app_backend import run_analysis, prepare_python_dashboard_payload
+from src.render_python import (
+    render_dashboard_blocks,
+    map_selected_kpis,
+    map_selected_charts,
+)
 
 import streamlit as st
 
@@ -97,8 +102,13 @@ def init_state() -> None:
         "analysis_ready": False,
         "selection": None,
         "generated_outputs": {},
+        "processed_paths": {},
         "dashboard_generated": False,
         "dashboard_message": "",
+        "python_dashboard_payload": None,
+        "selected_dashboard_kpis": [],
+        "selected_dashboard_charts": [],
+        "selected_dashboard_output_type": "python",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -216,6 +226,7 @@ def render_screen_2() -> None:
 
         st.markdown("**Map outputs to generate**")
         selected_maps = []
+
         daily_static_checked = st.checkbox(MAP_OPTIONS["daily_static"], value=True)
         animated_hourly_checked = st.checkbox(MAP_OPTIONS["animated_hourly"], value=True)
 
@@ -233,8 +244,10 @@ def render_screen_2() -> None:
 
     if submitted:
         if not selected_maps:
-            st.warning("No map selected. You can still proceed later for dashboard-only mode, but for this prototype select at least one map.")
-            return
+            st.info(
+                "No map output selected. The app will prepare the analysis data so you can "
+                "still generate a dashboard or export on the next screen."
+            )
 
         selection = AnalysisSelection(
             dataset=dataset,
@@ -245,23 +258,25 @@ def render_screen_2() -> None:
             analysis_mode="day",
         )
 
-        # Placeholder processing status
         with st.status("Processing selected analysis...", expanded=True) as status:
             st.write("Validating inputs...")
             st.write("Downloading/loading data...")
             st.write("Preparing summaries...")
             st.write("Generating selected maps...")
-            generated_outputs = run_analysis(selection)
+
+            analysis_result = run_analysis(selection)
+
             status.update(label="Analysis ready", state="complete")
 
         st.session_state.selection = selection
-        st.session_state.generated_outputs = generated_outputs
+        st.session_state.generated_outputs = analysis_result["maps"]
+        st.session_state.processed_paths = analysis_result["processed_paths"]
         st.session_state.analysis_ready = True
+
         go_to_screen(3)
 
     if st.button("Back"):
         go_to_screen(1)
-
 
 
 def render_screen_3() -> None:
@@ -305,7 +320,7 @@ def render_screen_3() -> None:
     if "animated_hourly" in generated_outputs:
         animated_path = Path(generated_outputs["animated_hourly"])
         if animated_path.exists():
-            available_map_options["Animated hourly map"] = animated_path
+            available_map_options["Animated Hourly Map"] = animated_path
         else:
             st.error(f"Animated hourly map file not found: {animated_path}")
     else:
@@ -354,25 +369,100 @@ def render_screen_3() -> None:
     st.caption("Select up to 4 total KPI/chart items.")
 
     with st.form("dashboard_form"):
-        selected_kpis = st.multiselect("KPI cards", options=DASHBOARD_KPIS)
-        selected_charts = st.multiselect("Charts / tables", options=DASHBOARD_CHARTS)
+        selected_kpis = st.multiselect(
+            "KPI cards",
+            options=DASHBOARD_KPIS,
+            default=st.session_state.selected_dashboard_kpis,
+        )
+
+        selected_charts = st.multiselect(
+            "Charts / tables",
+            options=DASHBOARD_CHARTS,
+            default=st.session_state.selected_dashboard_charts,
+        )
+
+        output_type_options = list(OUTPUT_TYPES.keys())
+        selected_output_type = (
+            st.session_state.selected_dashboard_output_type
+            if st.session_state.selected_dashboard_output_type in output_type_options
+            else output_type_options[0]
+        )
+
         output_type = st.radio(
             "Output type",
-            options=list(OUTPUT_TYPES.keys()),
+            options=output_type_options,
             format_func=lambda key: OUTPUT_TYPES[key],
+            index=output_type_options.index(selected_output_type),
             horizontal=False,
         )
 
         dashboard_submitted = st.form_submit_button("Generate Dashboard / Export")
 
     if dashboard_submitted:
-        message = mock_generate_dashboard(selected_kpis, selected_charts, output_type)
-        st.session_state.dashboard_generated = True
-        st.session_state.dashboard_message = message
+        total_items = len(selected_kpis) + len(selected_charts)
+
+        if total_items == 0:
+            st.session_state.dashboard_generated = False
+            st.session_state.dashboard_message = (
+                "Please select at least one KPI or chart before generating the dashboard/export."
+            )
+            st.session_state.python_dashboard_payload = None
+            st.rerun()
+
+        if total_items > 4:
+            st.session_state.dashboard_generated = False
+            st.session_state.dashboard_message = (
+                "Please select at most 4 dashboard elements in total."
+            )
+            st.session_state.python_dashboard_payload = None
+            st.rerun()
+
+        st.session_state.selected_dashboard_kpis = selected_kpis
+        st.session_state.selected_dashboard_charts = selected_charts
+        st.session_state.selected_dashboard_output_type = output_type
+
+        if output_type == "python":
+            payload = prepare_python_dashboard_payload(st.session_state.processed_paths)
+            st.session_state.python_dashboard_payload = payload
+            st.session_state.dashboard_generated = True
+            st.session_state.dashboard_message = "Python dashboard generated successfully."
+            st.rerun()
+        else:
+            st.session_state.python_dashboard_payload = None
+            st.session_state.dashboard_generated = True
+            st.session_state.dashboard_message = (
+                "Power BI export layer is not connected yet. "
+                "The Python dashboard path works already."
+            )
+            st.rerun()
+
+    if st.session_state.dashboard_message:
+        st.info(st.session_state.dashboard_message)
+
+    if st.button("Clear Dashboard Selection"):
+        st.session_state.selected_dashboard_kpis = []
+        st.session_state.selected_dashboard_charts = []
+        st.session_state.selected_dashboard_output_type = "python"
+        st.session_state.python_dashboard_payload = None
+        st.session_state.dashboard_generated = False
+        st.session_state.dashboard_message = ""
         st.rerun()
 
-    if st.session_state.dashboard_generated:
-        st.info(st.session_state.dashboard_message)
+    if st.session_state.python_dashboard_payload is not None:
+        st.markdown("### Python Dashboard Output")
+
+        backend_selected_kpis = map_selected_kpis(
+            st.session_state.selected_dashboard_kpis
+        )
+        backend_selected_charts = map_selected_charts(
+            st.session_state.selected_dashboard_charts
+        )
+
+        render_dashboard_blocks(
+            selected_kpis=backend_selected_kpis,
+            selected_charts=backend_selected_charts,
+            payload=st.session_state.python_dashboard_payload,
+        )
 
     col1, col2 = st.columns(2)
 
@@ -387,8 +477,13 @@ def render_screen_3() -> None:
                 "analysis_ready",
                 "selection",
                 "generated_outputs",
+                "processed_paths",
                 "dashboard_generated",
                 "dashboard_message",
+                "python_dashboard_payload",
+                "selected_dashboard_kpis",
+                "selected_dashboard_charts",
+                "selected_dashboard_output_type",
             ]:
                 if key in st.session_state:
                     del st.session_state[key]
