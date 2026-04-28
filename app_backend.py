@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pandas as pd
+
 from src.config import SUPPORTED_DATASETS
 from src.download import download_parquet_file
 from src.preprocess import (
@@ -28,7 +30,17 @@ from src.dashboard import (
 ZONES_PATH = Path("data/reference/taxi_zones/taxi_zones.shp")
 
 
-def run_analysis(selection):
+def run_analysis(selection, workdir: str | Path | None = None):
+
+    base_dir = Path(workdir) if workdir is not None else Path("outputs")
+    maps_dir = base_dir / "maps"
+    processed_dir = base_dir / "processed"
+    raw_dir = base_dir / "raw"
+
+    maps_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
     dataset = selection.dataset
     year = selection.year
     month = selection.month
@@ -41,7 +53,7 @@ def run_analysis(selection):
     output_dir = Path("outputs/maps")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    parquet_path = download_parquet_file(dataset, year, month)
+    parquet_path = download_parquet_file(dataset, year, month, raw_dir=raw_dir)
 
     processed_paths = run_preprocessing(
         parquet_path=parquet_path,
@@ -49,6 +61,7 @@ def run_analysis(selection):
         year=year,
         month=month,
         day=day,
+        processed_dir=processed_dir,
     )
 
     zones = load_zones(zones_path)
@@ -59,7 +72,7 @@ def run_analysis(selection):
         daily_summary = load_daily_summary(processed_paths["daily"])
         merged = merge_zones_with_summary(zones, daily_summary)
 
-        daily_map_path = output_dir / f"daily_multi_metric_map_{dataset}_{date_str}.html"
+        daily_map_path = maps_dir / f"daily_multi_metric_map_{dataset}_{date_str}.html"
         create_multi_metric_daily_map(
             zones_gdf=merged,
             output_path=daily_map_path,
@@ -70,7 +83,7 @@ def run_analysis(selection):
     if "animated_hourly" in selected_maps:
         hourly_summary = load_hourly_summary(processed_paths["hourly"])
 
-        animated_map_path = output_dir / f"animated_hourly_multi_metric_{dataset}_{date_str}.html"
+        animated_map_path = maps_dir / f"animated_hourly_multi_metric_{dataset}_{date_str}.html"
         create_single_html_animated_metric_map(
             zones=zones,
             hourly_summary=hourly_summary,
@@ -85,13 +98,16 @@ def run_analysis(selection):
         "processed_paths": processed_paths,
     }
 
-def prepare_python_dashboard_payload(processed_paths: dict):
+def prepare_python_dashboard_payload(processed_paths: dict, dataset: str):
+    trip_df = pd.read_csv(processed_paths["trip"])
     daily_summary = load_daily_dashboard_summary(processed_paths["daily"])
     hourly_summary = load_hourly_dashboard_summary(processed_paths["hourly"])
     od_summary = load_od_summary(processed_paths["od"])
     zones_ref = load_zone_reference("data/reference/taxi_zones/taxi_zones.shp")
 
     payload = build_dashboard_payload(
+        trip_df=trip_df,
+        dataset=dataset,
         daily_summary=daily_summary,
         hourly_summary=hourly_summary,
         od_summary=od_summary,

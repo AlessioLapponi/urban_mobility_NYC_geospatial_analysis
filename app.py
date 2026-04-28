@@ -19,8 +19,41 @@ import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
+import atexit
+import tempfile
+import shutil
+
 STATIC_SERVER_PORT = 8765
 
+SESSION_TEMP_DIRS: set[str] = set()
+
+def cleanup_stale_tempdirs(prefix: str = "nyc_taxi_app_") -> None:
+    temp_root = Path(tempfile.gettempdir())
+
+    for candidate in temp_root.iterdir():
+        if candidate.is_dir() and candidate.name.startswith(prefix):
+            try:
+                shutil.rmtree(candidate, ignore_errors=True)
+            except Exception:
+                pass
+
+def cleanup_all_session_tempdirs() -> None:
+    for folder in list(SESSION_TEMP_DIRS):
+        try:
+            temp_dir = Path(folder)
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+atexit.register(cleanup_all_session_tempdirs)
+
+def ensure_session_workdir() -> Path:
+    if "session_workdir" not in st.session_state or not st.session_state.session_workdir:
+        temp_dir = Path(tempfile.mkdtemp(prefix="nyc_taxi_app_"))
+        st.session_state.session_workdir = str(temp_dir)
+        SESSION_TEMP_DIRS.add(str(temp_dir))
+    return Path(st.session_state.session_workdir)
 
 def ensure_static_server(root_dir: str = ".") -> None:
     if st.session_state.get("static_server_started", False):
@@ -73,6 +106,10 @@ DASHBOARD_CHARTS = [
     "Average trip distance by pickup zone",
     "Borough summary table",
     "Borough bar chart",
+    "Average fare per distance by pickup zone",
+    "Average fare per distance by hour",
+    "Borough share summary",
+    "Average fare per distance by borough",
 ]
 OUTPUT_TYPES = {
     "python": "Python-native dashboard output",
@@ -96,6 +133,12 @@ class AnalysisSelection:
 # =========================
 # Session state helpers
 # =========================
+def main() -> None:
+    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    cleanup_stale_tempdirs()
+    init_state()
+    ensure_static_server(root_dir=".")
+
 def init_state() -> None:
     defaults = {
         "screen": 1,
@@ -109,6 +152,7 @@ def init_state() -> None:
         "selected_dashboard_kpis": [],
         "selected_dashboard_charts": [],
         "selected_dashboard_output_type": "python",
+        "session_workdir": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -264,7 +308,8 @@ def render_screen_2() -> None:
             st.write("Preparing summaries...")
             st.write("Generating selected maps...")
 
-            analysis_result = run_analysis(selection)
+            session_workdir = ensure_session_workdir()
+            analysis_result = run_analysis(selection, workdir=session_workdir)
 
             status.update(label="Analysis ready", state="complete")
 
@@ -422,7 +467,7 @@ def render_screen_3() -> None:
         st.session_state.selected_dashboard_output_type = output_type
 
         if output_type == "python":
-            payload = prepare_python_dashboard_payload(st.session_state.processed_paths)
+            payload = prepare_python_dashboard_payload(st.session_state.processed_paths,st.session_state.selection.dataset)
             st.session_state.python_dashboard_payload = payload
             st.session_state.dashboard_generated = True
             st.session_state.dashboard_message = "Python dashboard generated successfully."
@@ -470,25 +515,33 @@ def render_screen_3() -> None:
         if st.button("Back to Setup"):
             go_to_screen(2)
 
-    with col2:
-        if st.button("Start Over"):
-            for key in [
-                "screen",
-                "analysis_ready",
-                "selection",
-                "generated_outputs",
-                "processed_paths",
-                "dashboard_generated",
-                "dashboard_message",
-                "python_dashboard_payload",
-                "selected_dashboard_kpis",
-                "selected_dashboard_charts",
-                "selected_dashboard_output_type",
-            ]:
-                if key in st.session_state:
-                    del st.session_state[key]
-            init_state()
-            go_to_screen(1)
+        with col2:
+            if st.button("Start Over"):
+                if st.session_state.get("session_workdir"):
+                    temp_dir = Path(st.session_state.session_workdir)
+                    if temp_dir.exists():
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    SESSION_TEMP_DIRS.discard(str(temp_dir))
+
+                for key in [
+                    "screen",
+                    "analysis_ready",
+                    "selection",
+                    "generated_outputs",
+                    "processed_paths",
+                    "dashboard_generated",
+                    "dashboard_message",
+                    "python_dashboard_payload",
+                    "selected_dashboard_kpis",
+                    "selected_dashboard_charts",
+                    "selected_dashboard_output_type",
+                    "session_workdir",
+                ]:
+                    if key in st.session_state:
+                        del st.session_state[key]
+
+                init_state()
+                go_to_screen(1)
 
 # =========================
 # Main app entry point

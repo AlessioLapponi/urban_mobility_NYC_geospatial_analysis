@@ -55,8 +55,11 @@ def build_daily_zone_summary(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     total_col = cfg["total_amount"]
     distance_col = cfg["trip_distance"]
 
+    pickups_df = df[df[pu_col].notna()].copy()
+    dropoffs_df = df[df[do_col].notna()].copy()
+
     pickups = (
-        df.groupby(pu_col)
+        pickups_df.groupby(pu_col)
         .agg(
             pickups_count=(pu_col, "size"),
             total_revenue=(total_col, "sum"),
@@ -68,7 +71,7 @@ def build_daily_zone_summary(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     )
 
     dropoffs = (
-        df.groupby(do_col)
+        dropoffs_df.groupby(do_col)
         .size()
         .reset_index(name="dropoffs_count")
         .rename(columns={do_col: "LocationID"})
@@ -109,8 +112,10 @@ def build_od_summary(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
     total_col = cfg["total_amount"]
     distance_col = cfg["trip_distance"]
 
+    od_df = df[df[pu_col].notna() & df[do_col].notna()].copy()
+
     od = (
-        df.groupby([pu_col, do_col])
+        od_df.groupby([pu_col, do_col])
         .agg(
             trips_count=(pu_col, "size"),
             total_revenue=(total_col, "sum"),
@@ -125,6 +130,7 @@ def build_od_summary(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
 
 
 def save_processed_outputs(
+    trip_df: pd.DataFrame,
     daily_summary: pd.DataFrame,
     hourly_summary: pd.DataFrame,
     od_summary: pd.DataFrame,
@@ -139,22 +145,32 @@ def save_processed_outputs(
 
     suffix = f"{dataset}_{year}-{month:02d}-{day:02d}"
 
+    trip_path = processed_path / f"daily_trip_data_{suffix}.csv"
     daily_path = processed_path / f"daily_zone_summary_{suffix}.csv"
     hourly_path = processed_path / f"hourly_zone_summary_{suffix}.csv"
     od_path = processed_path / f"od_summary_{suffix}.csv"
 
+    trip_df.to_csv(trip_path, index=False)
     daily_summary.to_csv(daily_path, index=False)
     hourly_summary.to_csv(hourly_path, index=False)
     od_summary.to_csv(od_path, index=False)
 
     return {
+        "trip": trip_path,
         "daily": daily_path,
         "hourly": hourly_path,
         "od": od_path,
     }
 
 
-def run_preprocessing(parquet_path: Path, dataset: str, year: int, month: int, day: int) -> dict[str, Path]:
+def run_preprocessing(
+    parquet_path: Path,
+    dataset: str,
+    year: int,
+    month: int,
+    day: int,
+    processed_dir: str = "data/processed",
+) -> dict[str, Path]:
     df = load_required_trip_data(parquet_path, dataset)
     df = filter_day(df, dataset, year, month, day)
     df = add_time_columns(df, dataset)
@@ -164,6 +180,7 @@ def run_preprocessing(parquet_path: Path, dataset: str, year: int, month: int, d
     od_summary = build_od_summary(df, dataset)
 
     return save_processed_outputs(
+        trip_df=df,
         daily_summary=daily_summary,
         hourly_summary=hourly_summary,
         od_summary=od_summary,
@@ -171,4 +188,5 @@ def run_preprocessing(parquet_path: Path, dataset: str, year: int, month: int, d
         year=year,
         month=month,
         day=day,
+        processed_dir=str(processed_dir),
     )

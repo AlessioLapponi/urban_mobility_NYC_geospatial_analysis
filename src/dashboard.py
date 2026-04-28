@@ -5,13 +5,31 @@ from typing import Any, Dict
 
 import pandas as pd
 
+import numpy as np
+
+from .config import SUPPORTED_DATASETS
+
+def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    denominator = denominator.replace(0, np.nan)
+    result = numerator / denominator
+    result = result.replace([np.inf, -np.inf], np.nan)
+    return result
 
 # =========================
 # Load helpers
 # =========================
+
+def _drop_invalid_metric_rows(df: pd.DataFrame, metric_col: str) -> pd.DataFrame:
+    return df[df[metric_col].notna()].copy()
+
 def load_daily_summary(csv_path: str | Path) -> pd.DataFrame:
     return pd.read_csv(csv_path)
 
+def _clean_zone_table(df: pd.DataFrame) -> pd.DataFrame:
+    zone_cols = [col for col in ["zone", "borough", "pickup_zone", "pickup_borough", "dropoff_zone", "dropoff_borough"] if col in df.columns]
+    if zone_cols:
+        df = df.dropna(subset=zone_cols, how="any").copy()
+    return df
 
 def load_hourly_summary(csv_path: str | Path) -> pd.DataFrame:
     return pd.read_csv(csv_path)
@@ -121,8 +139,10 @@ def build_top_pickup_zones(
     top_n: int = 10,
 ) -> pd.DataFrame:
     merged = daily_summary.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
     result = (
-        merged[["LocationID", "zone", "borough", "pickups_count"]]
+        merged[["zone", "borough", "pickups_count"]]
         .sort_values("pickups_count", ascending=False)
         .head(top_n)
         .reset_index(drop=True)
@@ -136,8 +156,10 @@ def build_top_dropoff_zones(
     top_n: int = 10,
 ) -> pd.DataFrame:
     merged = daily_summary.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
     result = (
-        merged[["LocationID", "zone", "borough", "dropoffs_count"]]
+        merged[["zone", "borough", "dropoffs_count"]]
         .sort_values("dropoffs_count", ascending=False)
         .head(top_n)
         .reset_index(drop=True)
@@ -168,17 +190,16 @@ def build_top_od_routes(
     merged = od_summary.merge(pu_ref, on="PU_LocationID", how="left").merge(
         do_ref, on="DO_LocationID", how="left"
     )
+    merged = _clean_zone_table(merged)
 
     result = (
         merged[
             [
-                "PU_LocationID",
+                "trips_count",
                 "pickup_zone",
                 "pickup_borough",
-                "DO_LocationID",
                 "dropoff_zone",
                 "dropoff_borough",
-                "trips_count",
                 "total_revenue",
                 "avg_trip_distance",
             ]
@@ -221,8 +242,10 @@ def build_average_fare_by_pickup_zone(
     top_n: int = 10,
 ) -> pd.DataFrame:
     merged = daily_summary.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
     result = (
-        merged[["LocationID", "zone", "borough", "avg_fare", "pickups_count"]]
+        merged[["zone", "borough", "avg_fare", "pickups_count"]]
         .sort_values("avg_fare", ascending=False)
         .head(top_n)
         .reset_index(drop=True)
@@ -236,12 +259,191 @@ def build_average_trip_distance_by_pickup_zone(
     top_n: int = 10,
 ) -> pd.DataFrame:
     merged = daily_summary.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
     result = (
-        merged[["LocationID", "zone", "borough", "avg_trip_distance", "pickups_count"]]
+        merged[["zone", "borough", "avg_trip_distance", "pickups_count"]]
         .sort_values("avg_trip_distance", ascending=False)
         .head(top_n)
         .reset_index(drop=True)
     )
+    return result
+
+def build_borough_bar_chart_data(
+    daily_summary: pd.DataFrame,
+    zones_ref: pd.DataFrame,
+) -> pd.DataFrame:
+    return build_borough_summary(daily_summary, zones_ref)
+
+# ==========================
+# Derived analysis functions
+# ==========================
+def build_revenue_per_distance_by_pickup_zone(
+    daily_summary: pd.DataFrame,
+    zones_ref: pd.DataFrame,
+    top_n: int = 10,
+) -> pd.DataFrame:
+    merged = daily_summary.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
+    merged["revenue_per_distance"] = _safe_divide(
+        merged["total_revenue"],
+        merged["avg_trip_distance"] * merged["pickups_count"]
+    )
+
+    merged = _drop_invalid_metric_rows(merged, "revenue_per_distance")
+
+    result = (
+        merged[["zone", "borough", "pickups_count", "total_revenue", "avg_trip_distance", "revenue_per_distance"]]
+        .sort_values("revenue_per_distance", ascending=False)
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+    return result
+
+def build_average_fare_per_distance_by_hour(hourly_summary: pd.DataFrame) -> pd.DataFrame:
+    df = hourly_summary.copy()
+
+    df["fare_per_distance"] = _safe_divide(
+        df["avg_fare"],
+        df["avg_trip_distance"]
+    )
+
+    df = _drop_invalid_metric_rows(df, "fare_per_distance")
+
+    result = (
+        df.groupby("pickup_hour", as_index=False)
+        .agg(
+            fare_per_distance=("fare_per_distance", "mean"),
+            pickups_count=("pickups_count", "sum"),
+        )
+        .sort_values("pickup_hour")
+        .reset_index(drop=True)
+    )
+    return result
+
+def build_borough_share_summary(
+    daily_summary: pd.DataFrame,
+    zones_ref: pd.DataFrame,
+) -> pd.DataFrame:
+    merged = daily_summary.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
+    result = (
+        merged.groupby("borough", as_index=False)
+        .agg(
+            total_pickups=("pickups_count", "sum"),
+            total_revenue=("total_revenue", "sum"),
+        )
+        .reset_index(drop=True)
+    )
+
+    total_pickups = result["total_pickups"].sum()
+    total_revenue = result["total_revenue"].sum()
+
+    result["pickup_share"] = _safe_divide(result["total_pickups"], pd.Series(total_pickups, index=result.index))
+    result["revenue_share"] = _safe_divide(result["total_revenue"], pd.Series(total_revenue, index=result.index))
+    result["revenue_share_vs_pickup_share"] = _safe_divide(result["revenue_share"], result["pickup_share"])
+
+    result = _drop_invalid_metric_rows(result, "revenue_share_vs_pickup_share")
+    result = result.sort_values("total_pickups", ascending=False).reset_index(drop=True)
+
+    return result
+
+def build_average_fare_per_distance_by_borough(
+    trip_df: pd.DataFrame,
+    dataset: str,
+    zones_ref: pd.DataFrame,
+    min_trips: int = 10,
+) -> pd.DataFrame:
+    cfg = SUPPORTED_DATASETS[dataset]
+    pu_col = cfg["pickup_zone"]
+    fare_col = cfg["fare_amount"]
+    distance_col = cfg["trip_distance"]
+
+    df = trip_df.copy()
+    df = df[df[pu_col].notna()].copy()
+    df = df[df[distance_col] > 0].copy()
+
+    df["fare_per_distance"] = _safe_divide(df[fare_col], df[distance_col])
+    df = _drop_invalid_metric_rows(df, "fare_per_distance")
+
+    grouped = (
+        df.groupby(pu_col)
+        .agg(
+            pickups_count=(pu_col, "size"),
+            fare_per_distance=("fare_per_distance", "mean"),
+        )
+        .reset_index()
+        .rename(columns={pu_col: "LocationID"})
+    )
+
+    grouped = grouped[grouped["pickups_count"] >= min_trips].copy()
+
+    merged = grouped.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
+    borough_result = (
+        merged.groupby("borough", as_index=False)
+        .agg(
+            total_pickups=("pickups_count", "sum"),
+            avg_fare_per_distance=("fare_per_distance", "mean"),
+        )
+        .sort_values("avg_fare_per_distance", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    return borough_result
+
+def build_average_fare_per_distance_by_pickup_zone(
+    trip_df: pd.DataFrame,
+    dataset: str,
+    zones_ref: pd.DataFrame,
+    top_n: int = 10,
+    min_pickups: int = 10,
+    min_avg_trip_distance: float = 1.0,
+) -> pd.DataFrame:
+    cfg = SUPPORTED_DATASETS[dataset]
+    pu_col = cfg["pickup_zone"]
+    fare_col = cfg["fare_amount"]
+    distance_col = cfg["trip_distance"]
+
+    df = trip_df.copy()
+    df = df[df[pu_col].notna()].copy()
+    df = df[df[distance_col] > 0].copy()
+
+    df["fare_per_distance"] = _safe_divide(df[fare_col], df[distance_col])
+    df = _drop_invalid_metric_rows(df, "fare_per_distance")
+
+    grouped = (
+        df.groupby(pu_col)
+        .agg(
+            pickups_count=(pu_col, "size"),
+            avg_trip_distance=(distance_col, "mean"),
+            avg_fare=(fare_col, "mean"),
+            fare_per_distance=("fare_per_distance", "mean"),
+        )
+        .reset_index()
+        .rename(columns={pu_col: "LocationID"})
+    )
+
+    grouped = grouped[
+        (grouped["pickups_count"] >= min_pickups) &
+        (grouped["avg_trip_distance"] >= min_avg_trip_distance)
+    ].copy()
+
+    merged = grouped.merge(zones_ref, on="LocationID", how="left")
+    merged = _clean_zone_table(merged)
+
+    result = (
+        merged[
+            ["zone", "borough", "pickups_count", "avg_fare", "avg_trip_distance", "fare_per_distance"]
+        ]
+        .sort_values("fare_per_distance", ascending=False)
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+
     return result
 
 # =========================
@@ -249,6 +451,8 @@ def build_average_trip_distance_by_pickup_zone(
 # A single place to compute all daily dashboard elements
 # =========================
 def build_dashboard_payload(
+    trip_df: pd.DataFrame,
+    dataset: str,
     daily_summary: pd.DataFrame,
     hourly_summary: pd.DataFrame,
     od_summary: pd.DataFrame,
@@ -274,6 +478,10 @@ def build_dashboard_payload(
             "borough_bar_chart": build_borough_bar_chart_data(daily_summary, zones_ref),
             "average_fare_by_pickup_zone": build_average_fare_by_pickup_zone(daily_summary, zones_ref),
             "average_trip_distance_by_pickup_zone": build_average_trip_distance_by_pickup_zone(daily_summary, zones_ref),
+            "average_fare_per_distance_by_pickup_zone": build_average_fare_per_distance_by_pickup_zone(trip_df, dataset, zones_ref),
+            "average_fare_per_distance_by_hour": build_average_fare_per_distance_by_hour(hourly_summary),
+            "borough_share_summary": build_borough_share_summary(daily_summary, zones_ref),
+            "average_fare_per_distance_by_borough": build_average_fare_per_distance_by_borough(trip_df, dataset, zones_ref),
         },
     }
 
