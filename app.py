@@ -9,8 +9,34 @@ from app_backend import run_analysis
 import streamlit as st
 
 import streamlit.components.v1 as components
+import os
+import threading
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+
+STATIC_SERVER_PORT = 8765
 
 
+def ensure_static_server(root_dir: str = ".") -> None:
+    if st.session_state.get("static_server_started", False):
+        return
+
+    class QuietHandler(SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+    def run_server():
+        os.chdir(root_dir)
+        server = ThreadingHTTPServer(("127.0.0.1", STATIC_SERVER_PORT), QuietHandler)
+        server.serve_forever()
+
+    thread = threading.Thread(target=run_server, daemon=True)
+    thread.start()
+    st.session_state.static_server_started = True
+
+def build_local_http_url(file_path: Path) -> str:
+    relative_path = file_path.as_posix()
+    return f"http://127.0.0.1:{STATIC_SERVER_PORT}/{relative_path}"
 # =========================
 # Configuration
 # =========================
@@ -295,8 +321,29 @@ def render_screen_3() -> None:
         selected_map_path = available_map_options[selected_map_label]
 
         try:
-            html_content = selected_map_path.read_text(encoding="utf-8")
-            components.html(html_content, height=700, scrolling=True)
+            if selected_map_label == "Daily static map":
+                html_content = selected_map_path.read_text(encoding="utf-8")
+                components.html(html_content, height=700, scrolling=True)
+            else:
+                animated_url = build_local_http_url(selected_map_path)
+                st.info(
+                    "The animated map is opened as a separate web page to avoid "
+                    "Streamlit size limits."
+                )
+                st.link_button(
+                    "Open Animated Hourly Map",
+                    url=animated_url,
+                    help="Open the generated animated map in a new tab.",
+                )
+
+            with open(selected_map_path, "rb") as f:
+                st.download_button(
+                    label=f"Download {selected_map_label}",
+                    data=f,
+                    file_name=selected_map_path.name,
+                    mime="text/html",
+                )
+
         except Exception as e:
             st.error(f"Could not load the selected map: {e}")
     else:
@@ -348,13 +395,13 @@ def render_screen_3() -> None:
             init_state()
             go_to_screen(1)
 
-
 # =========================
 # Main app entry point
 # =========================
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     init_state()
+    ensure_static_server(root_dir=".")
 
     screen = st.session_state.screen
 
