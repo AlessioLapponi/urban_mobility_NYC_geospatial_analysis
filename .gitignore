@@ -8,3 +8,6 @@ __pycache__/
 .DS_Store
 .vscode/
 notes/
+notebooks/_cache/
+notebooks/data/
+notebooks/notebooks/_cache/

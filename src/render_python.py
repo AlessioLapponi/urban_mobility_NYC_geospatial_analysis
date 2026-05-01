@@ -122,11 +122,10 @@ def render_pickups_by_hour(df: pd.DataFrame) -> None:
     pretty_df = prettify_columns(df.copy())
     st.bar_chart(pretty_df.set_index("Hour")["Pickups Count"])
 
-
 def render_revenue_by_hour(df: pd.DataFrame) -> None:
     st.markdown("#### Revenue by Hour")
     pretty_df = prettify_columns(df.copy())
-    st.bar_chart(pretty_df.set_index("Hour")["Total Revenue"])
+    st.bar_chart(pretty_df.set_index("Hour")["Total Revenue ($)"])
 
 
 def render_table(title: str, df: pd.DataFrame) -> None:
@@ -238,18 +237,25 @@ def render_chart_or_table(chart_key: str, payload: Dict[str, Any]) -> None:
 def render_dashboard_blocks(
     selected_kpis: Iterable[str],
     selected_charts: Iterable[str],
+    selected_business_insight_dashboards: Iterable[str],
     payload: Dict[str, Any],
 ) -> None:
     selected_kpis = list(selected_kpis)
     selected_charts = list(selected_charts)
+    selected_business_insight_dashboards = list(selected_business_insight_dashboards)
 
     if selected_kpis:
-        st.markdown("### KPI Overview")
+        st.markdown("### KPIs")
         render_kpi_cards(selected_kpis, payload)
 
     if selected_charts:
-        st.markdown("### Analytical Views")
+        st.markdown("### Charts & Tables")
         for chart_key in selected_charts:
+            render_chart_or_table(chart_key, payload)
+
+    if selected_business_insight_dashboards:
+        st.markdown("### Business Insight Charts & Tables")
+        for chart_key in selected_business_insight_dashboards:
             render_chart_or_table(chart_key, payload)
 
 
@@ -280,6 +286,9 @@ CHART_UI_TO_KEY = {
     "Borough bar chart": "borough_bar_chart",
     "Average fare by pickup zone": "average_fare_by_pickup_zone",
     "Average trip distance by pickup zone": "average_trip_distance_by_pickup_zone",
+}
+
+BUSINESS_INSIGHT_UI_TO_KEY = {
     "Average fare per distance by pickup zone": "average_fare_per_distance_by_pickup_zone",
     "Average fare per distance by hour": "average_fare_per_distance_by_hour",
     "Borough share summary": "borough_share_summary",
@@ -293,3 +302,12 @@ def map_selected_kpis(ui_selected_kpis: Iterable[str]) -> list[str]:
 
 def map_selected_charts(ui_selected_charts: Iterable[str]) -> list[str]:
     return [CHART_UI_TO_KEY[item] for item in ui_selected_charts if item in CHART_UI_TO_KEY]
+
+def map_selected_business_insight_dashboards(
+    ui_selected_business_insight_dashboards: Iterable[str],
+) -> list[str]:
+    return [
+        BUSINESS_INSIGHT_UI_TO_KEY[item]
+        for item in ui_selected_business_insight_dashboards
+        if item in BUSINESS_INSIGHT_UI_TO_KEY
+    ]

@@ -9,6 +9,7 @@ from src.render_python import (
     render_dashboard_blocks,
     map_selected_kpis,
     map_selected_charts,
+    map_selected_business_insight_dashboards,
 )
 
 import streamlit as st
@@ -106,11 +107,15 @@ DASHBOARD_CHARTS = [
     "Average trip distance by pickup zone",
     "Borough summary table",
     "Borough bar chart",
+]
+
+BUSINESS_INSIGHT_DASHBOARDS = [
     "Average fare per distance by pickup zone",
     "Average fare per distance by hour",
     "Borough share summary",
     "Average fare per distance by borough",
 ]
+
 OUTPUT_TYPES = {
     "python": "Python-native dashboard output",
     "powerbi": "Power BI-ready export",
@@ -151,6 +156,7 @@ def init_state() -> None:
         "python_dashboard_payload": None,
         "selected_dashboard_kpis": [],
         "selected_dashboard_charts": [],
+        "selected_business_insight_dashboards": [],
         "selected_dashboard_output_type": "python",
         "session_workdir": None,
     }
@@ -198,9 +204,13 @@ def mock_generate_dashboard(
     output_type: str,
 ) -> str:
     if not selected_kpis and not selected_charts:
-        return "Please select at least one KPI or chart before generating the dashboard/export."
+        return "Please select at least one KPI, Chart/Table, or Business Insight Chart/Table before generating the dashboard/export."
 
-    total_items = len(selected_kpis) + len(selected_charts)
+    total_items = total_items = (
+    len(selected_kpis)
+    + len(selected_charts)
+    + len(selected_business_insight_dashboards)
+)
     if total_items > 4:
         return "Please select at most 4 dashboard elements in total."
 
@@ -338,15 +348,25 @@ def render_screen_3() -> None:
         return
 
     st.markdown("### Selected analysis")
-    st.write(
-        {
-            "dataset": SUPPORTED_DATASETS[selection.dataset],
-            "year": selection.year,
-            "month": selection.month,
-            "day": selection.day,
-            "analysis_mode": selection.analysis_mode,
-            "selected_maps": [MAP_OPTIONS[key] for key in selection.selected_maps],
-        }
+
+    selected_maps_text = (
+        ", ".join(MAP_OPTIONS[key] for key in selection.selected_maps)
+        if selection.selected_maps
+            else "No map selected"
+    )
+
+    month_name = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ][selection.month - 1]
+
+    st.markdown(
+        f"""
+        **Dataset:** {SUPPORTED_DATASETS[selection.dataset]}  
+        **Date:** {selection.day} {month_name} {selection.year}  
+        **Analysis mode:** {selection.analysis_mode.title()}  
+        **Selected maps:** {selected_maps_text}
+        """
     )
 
     st.markdown("### Generated map outputs")
@@ -415,15 +435,21 @@ def render_screen_3() -> None:
 
     with st.form("dashboard_form"):
         selected_kpis = st.multiselect(
-            "KPI cards",
+            "KPIs",
             options=DASHBOARD_KPIS,
             default=st.session_state.selected_dashboard_kpis,
         )
 
         selected_charts = st.multiselect(
-            "Charts / tables",
+            "Charts & tables",
             options=DASHBOARD_CHARTS,
             default=st.session_state.selected_dashboard_charts,
+        )
+
+        selected_business_insight_dashboards = st.multiselect(
+            "Business Insight Charts & Tables",
+            options=BUSINESS_INSIGHT_DASHBOARDS,
+            default=st.session_state.selected_business_insight_dashboards,
         )
 
         output_type_options = list(OUTPUT_TYPES.keys())
@@ -444,7 +470,7 @@ def render_screen_3() -> None:
         dashboard_submitted = st.form_submit_button("Generate Dashboard / Export")
 
     if dashboard_submitted:
-        total_items = len(selected_kpis) + len(selected_charts)
+        total_items = len(selected_kpis) + len(selected_charts) + len(selected_business_insight_dashboards)
 
         if total_items == 0:
             st.session_state.dashboard_generated = False
@@ -464,6 +490,7 @@ def render_screen_3() -> None:
 
         st.session_state.selected_dashboard_kpis = selected_kpis
         st.session_state.selected_dashboard_charts = selected_charts
+        st.session_state.selected_business_insight_dashboards = selected_business_insight_dashboards
         st.session_state.selected_dashboard_output_type = output_type
 
         if output_type == "python":
@@ -487,6 +514,7 @@ def render_screen_3() -> None:
     if st.button("Clear Dashboard Selection"):
         st.session_state.selected_dashboard_kpis = []
         st.session_state.selected_dashboard_charts = []
+        st.session_state.selected_business_insight_dashboards = []
         st.session_state.selected_dashboard_output_type = "python"
         st.session_state.python_dashboard_payload = None
         st.session_state.dashboard_generated = False
@@ -502,46 +530,51 @@ def render_screen_3() -> None:
         backend_selected_charts = map_selected_charts(
             st.session_state.selected_dashboard_charts
         )
+        backend_selected_business_insights = map_selected_business_insight_dashboards(
+            st.session_state.selected_business_insight_dashboards
+        )
 
         render_dashboard_blocks(
             selected_kpis=backend_selected_kpis,
             selected_charts=backend_selected_charts,
+            selected_business_insight_dashboards=backend_selected_business_insights,
             payload=st.session_state.python_dashboard_payload,
         )
-
+#
     col1, col2 = st.columns(2)
 
     with col1:
         if st.button("Back to Setup"):
             go_to_screen(2)
 
-        with col2:
-            if st.button("Start Over"):
-                if st.session_state.get("session_workdir"):
-                    temp_dir = Path(st.session_state.session_workdir)
-                    if temp_dir.exists():
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-                    SESSION_TEMP_DIRS.discard(str(temp_dir))
+    with col2:
+        if st.button("Start Over"):
+            if st.session_state.get("session_workdir"):
+                temp_dir = Path(st.session_state.session_workdir)
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                SESSION_TEMP_DIRS.discard(str(temp_dir))
 
-                for key in [
-                    "screen",
-                    "analysis_ready",
-                    "selection",
-                    "generated_outputs",
-                    "processed_paths",
-                    "dashboard_generated",
-                    "dashboard_message",
-                    "python_dashboard_payload",
-                    "selected_dashboard_kpis",
-                    "selected_dashboard_charts",
-                    "selected_dashboard_output_type",
-                    "session_workdir",
-                ]:
-                    if key in st.session_state:
-                        del st.session_state[key]
+            for key in [
+                "screen",
+                "analysis_ready",
+                "selection",
+                "generated_outputs",
+                "processed_paths",
+                "dashboard_generated",
+                "dashboard_message",
+                "python_dashboard_payload",
+                "selected_dashboard_kpis",
+                "selected_dashboard_charts",
+                "selected_business_insight_dashboards",
+                "selected_dashboard_output_type",                    
+                "session_workdir",
+            ]:
+                if key in st.session_state:
+                    del st.session_state[key]
 
-                init_state()
-                go_to_screen(1)
+            init_state()
+            go_to_screen(1)
 
 # =========================
 # Main app entry point

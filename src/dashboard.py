@@ -301,25 +301,42 @@ def build_revenue_per_distance_by_pickup_zone(
     )
     return result
 
-def build_average_fare_per_distance_by_hour(hourly_summary: pd.DataFrame) -> pd.DataFrame:
-    df = hourly_summary.copy()
+def build_average_fare_per_distance_by_hour(
+    trip_df: pd.DataFrame,
+    dataset: str,
+    min_pickups: int = 10,
+    min_distance: float = 0.25,
+    max_fare_per_distance: float = 100.0,
+) -> pd.DataFrame:
+    cfg = SUPPORTED_DATASETS[dataset]
+    pickup_datetime_col = cfg["pickup_datetime"]
+    fare_col = cfg["fare_amount"]
+    distance_col = cfg["trip_distance"]
 
-    df["fare_per_distance"] = _safe_divide(
-        df["avg_fare"],
-        df["avg_trip_distance"]
-    )
+    df = trip_df.copy()
+    df[pickup_datetime_col] = pd.to_datetime(df[pickup_datetime_col], errors="coerce")
+    df = df.dropna(subset=[pickup_datetime_col]).copy()
 
+    df = df[df[fare_col] > 0].copy()
+    df = df[df[distance_col] >= min_distance].copy()
+
+    df["pickup_hour"] = df[pickup_datetime_col].dt.hour
+    df["fare_per_distance"] = _safe_divide(df[fare_col], df[distance_col])
     df = _drop_invalid_metric_rows(df, "fare_per_distance")
+    df = df[df["fare_per_distance"] <= max_fare_per_distance].copy()
 
     result = (
         df.groupby("pickup_hour", as_index=False)
         .agg(
+            pickups_count=("pickup_hour", "size"),
             fare_per_distance=("fare_per_distance", "mean"),
-            pickups_count=("pickups_count", "sum"),
         )
         .sort_values("pickup_hour")
         .reset_index(drop=True)
     )
+
+    result = result[result["pickups_count"] >= min_pickups].copy()
+
     return result
 
 def build_borough_share_summary(
@@ -355,6 +372,8 @@ def build_average_fare_per_distance_by_borough(
     dataset: str,
     zones_ref: pd.DataFrame,
     min_trips: int = 10,
+    min_distance: float = 0.25,
+    max_fare_per_distance: float = 20.0,
 ) -> pd.DataFrame:
     cfg = SUPPORTED_DATASETS[dataset]
     pu_col = cfg["pickup_zone"]
@@ -363,35 +382,31 @@ def build_average_fare_per_distance_by_borough(
 
     df = trip_df.copy()
     df = df[df[pu_col].notna()].copy()
-    df = df[df[distance_col] > 0].copy()
+    df = df[df[fare_col] > 0].copy()
+    df = df[df[distance_col] >= min_distance].copy()
 
     df["fare_per_distance"] = _safe_divide(df[fare_col], df[distance_col])
     df = _drop_invalid_metric_rows(df, "fare_per_distance")
+    df = df[df["fare_per_distance"] <= max_fare_per_distance].copy()
 
-    grouped = (
-        df.groupby(pu_col)
-        .agg(
-            pickups_count=(pu_col, "size"),
-            fare_per_distance=("fare_per_distance", "mean"),
-        )
-        .reset_index()
-        .rename(columns={pu_col: "LocationID"})
+    merged = df.merge(
+        zones_ref.rename(columns={"LocationID": pu_col}),
+        on=pu_col,
+        how="left",
     )
-
-    grouped = grouped[grouped["pickups_count"] >= min_trips].copy()
-
-    merged = grouped.merge(zones_ref, on="LocationID", how="left")
     merged = _clean_zone_table(merged)
 
     borough_result = (
         merged.groupby("borough", as_index=False)
         .agg(
-            total_pickups=("pickups_count", "sum"),
+            total_pickups=(pu_col, "size"),
             avg_fare_per_distance=("fare_per_distance", "mean"),
         )
         .sort_values("avg_fare_per_distance", ascending=False)
         .reset_index(drop=True)
     )
+
+    borough_result = borough_result[borough_result["total_pickups"] >= min_trips].copy()
 
     return borough_result
 
@@ -401,7 +416,8 @@ def build_average_fare_per_distance_by_pickup_zone(
     zones_ref: pd.DataFrame,
     top_n: int = 10,
     min_pickups: int = 10,
-    min_avg_trip_distance: float = 1.0,
+    min_distance: float = 0.25,
+    max_fare_per_distance: float = 100.0,
 ) -> pd.DataFrame:
     cfg = SUPPORTED_DATASETS[dataset]
     pu_col = cfg["pickup_zone"]
@@ -410,27 +426,26 @@ def build_average_fare_per_distance_by_pickup_zone(
 
     df = trip_df.copy()
     df = df[df[pu_col].notna()].copy()
-    df = df[df[distance_col] > 0].copy()
+    df = df[df[fare_col] > 0].copy()
+    df = df[df[distance_col] >= min_distance].copy()
 
     df["fare_per_distance"] = _safe_divide(df[fare_col], df[distance_col])
     df = _drop_invalid_metric_rows(df, "fare_per_distance")
+    df = df[df["fare_per_distance"] <= max_fare_per_distance].copy()
 
     grouped = (
         df.groupby(pu_col)
         .agg(
             pickups_count=(pu_col, "size"),
-            avg_trip_distance=(distance_col, "mean"),
             avg_fare=(fare_col, "mean"),
+            avg_trip_distance=(distance_col, "mean"),
             fare_per_distance=("fare_per_distance", "mean"),
         )
         .reset_index()
         .rename(columns={pu_col: "LocationID"})
     )
 
-    grouped = grouped[
-        (grouped["pickups_count"] >= min_pickups) &
-        (grouped["avg_trip_distance"] >= min_avg_trip_distance)
-    ].copy()
+    grouped = grouped[grouped["pickups_count"] >= min_pickups].copy()
 
     merged = grouped.merge(zones_ref, on="LocationID", how="left")
     merged = _clean_zone_table(merged)
@@ -479,7 +494,7 @@ def build_dashboard_payload(
             "average_fare_by_pickup_zone": build_average_fare_by_pickup_zone(daily_summary, zones_ref),
             "average_trip_distance_by_pickup_zone": build_average_trip_distance_by_pickup_zone(daily_summary, zones_ref),
             "average_fare_per_distance_by_pickup_zone": build_average_fare_per_distance_by_pickup_zone(trip_df, dataset, zones_ref),
-            "average_fare_per_distance_by_hour": build_average_fare_per_distance_by_hour(hourly_summary),
+            "average_fare_per_distance_by_hour": build_average_fare_per_distance_by_hour(trip_df, dataset),
             "borough_share_summary": build_borough_share_summary(daily_summary, zones_ref),
             "average_fare_per_distance_by_borough": build_average_fare_per_distance_by_borough(trip_df, dataset, zones_ref),
         },
