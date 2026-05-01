@@ -14,19 +14,23 @@ from src.render_python import (
 
 import streamlit as st
 
-import streamlit.components.v1 as components
-import os
-import threading
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from pathlib import Path
+#import streamlit.components.v1 as components
+#import os
+#import threading
+#from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 import atexit
 import tempfile
 import shutil
 
-STATIC_SERVER_PORT = 8765
+#STATIC_SERVER_PORT = 8765
 
 SESSION_TEMP_DIRS: set[str] = set()
+
+def ensure_one_time_temp_cleanup() -> None:
+    if not st.session_state.get("temp_cleanup_done", False):
+        cleanup_stale_tempdirs()
+        st.session_state.temp_cleanup_done = True
 
 def cleanup_stale_tempdirs(prefix: str = "nyc_taxi_app_") -> None:
     temp_root = Path(tempfile.gettempdir())
@@ -46,6 +50,17 @@ def cleanup_all_session_tempdirs() -> None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception:
             pass
+
+def cleanup_generated_static_maps() -> None:
+    generated_dir = Path("static/generated")
+    if generated_dir.exists():
+        shutil.rmtree(generated_dir, ignore_errors=True)
+
+
+def cleanup_stale_generated_static_maps() -> None:
+    generated_dir = Path("static/generated")
+    if generated_dir.exists():
+        shutil.rmtree(generated_dir, ignore_errors=True)
 
 atexit.register(cleanup_all_session_tempdirs)
 
@@ -138,11 +153,6 @@ class AnalysisSelection:
 # =========================
 # Session state helpers
 # =========================
-def main() -> None:
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
-    cleanup_stale_tempdirs()
-    init_state()
-    ensure_static_server(root_dir=".")
 
 def init_state() -> None:
     defaults = {
@@ -158,6 +168,7 @@ def init_state() -> None:
         "selected_dashboard_charts": [],
         "selected_business_insight_dashboards": [],
         "selected_dashboard_output_type": "python",
+        "temp_cleanup_done": False,
         "session_workdir": None,
     }
     for key, value in defaults.items():
@@ -235,7 +246,7 @@ def render_screen_1() -> None:
         - a **daily static geospatial map**
         - an **animated hourly choropleth map**
         - an optional **dashboard**
-        - an optional **Power BI-ready export**
+        - an optional **Power BI-ready export** (Still work in progress)
 
         The current version already generates the selected map outputs and provides the dashboard/export selection flow.
         """
@@ -281,8 +292,13 @@ def render_screen_2() -> None:
         st.markdown("**Map outputs to generate**")
         selected_maps = []
 
-        daily_static_checked = st.checkbox(MAP_OPTIONS["daily_static"], value=True)
-        animated_hourly_checked = st.checkbox(MAP_OPTIONS["animated_hourly"], value=True)
+        daily_static_checked = st.checkbox(MAP_OPTIONS["daily_static"], value=False)
+        animated_hourly_checked = st.checkbox(MAP_OPTIONS["animated_hourly"], value=False)
+
+        st.caption(
+            "Animated hourly maps may require a few minutes to generate. "
+            "They are available as downloadable HTML outputs and are not previewed inside the app."
+        )
 
         if daily_static_checked:
             selected_maps.append("daily_static")
@@ -390,10 +406,10 @@ def render_screen_3() -> None:
             st.error(f"Animated hourly map file not found: {animated_path}")
     else:
         st.caption("Animated hourly map not generated.")
-
+#
     if available_map_options:
         selected_map_label = st.radio(
-            "Choose which generated map to display",
+            "Choose which generated map to access",
             options=list(available_map_options.keys()),
             horizontal=True,
         )
@@ -402,27 +418,45 @@ def render_screen_3() -> None:
 
         try:
             if selected_map_label == "Daily static map":
-                html_content = selected_map_path.read_text(encoding="utf-8")
-                components.html(html_content, height=700, scrolling=True)
+                static_dir = Path("static").resolve()
+                selected_map_path_resolved = selected_map_path.resolve()
+
+                if static_dir in selected_map_path_resolved.parents:
+                    relative_static_path = selected_map_path_resolved.relative_to(static_dir).as_posix()
+                    map_url = f"/app/static/{relative_static_path}"
+
+                    st.link_button(
+                        "Open Daily Static Map",
+                        url=map_url,
+                        help="Open the generated HTML map in a new tab.",
+                    )
+                else:
+                    st.warning(
+                        "This map is not stored inside the Streamlit static folder, "
+                        "so it cannot be opened from the hosted app."
+                    )
+
+                with open(selected_map_path, "rb") as f:
+                    st.download_button(
+                        label="Download Daily Static Map (optional)",
+                        data=f,
+                        file_name=selected_map_path.name,
+                        mime="text/html",
+                    )
+
             else:
-                animated_url = build_local_http_url(selected_map_path)
                 st.info(
-                    "The animated map is opened as a separate web page to avoid "
-                    "Streamlit size limits."
-                )
-                st.link_button(
-                    "Open Animated Hourly Map",
-                    url=animated_url,
-                    help="Open the generated animated map in a new tab.",
+                    "The animated hourly map is available as a downloadable HTML file. "
+                    "Because of its size, it is not previewed or opened from the hosted app."
                 )
 
-            with open(selected_map_path, "rb") as f:
-                st.download_button(
-                    label=f"Download {selected_map_label}",
-                    data=f,
-                    file_name=selected_map_path.name,
-                    mime="text/html",
-                )
+                with open(selected_map_path, "rb") as f:
+                    st.download_button(
+                        label="Download Animated Hourly Map",
+                        data=f,
+                        file_name=selected_map_path.name,
+                        mime="text/html",
+                    )
 
         except Exception as e:
             st.error(f"Could not load the selected map: {e}")
@@ -467,6 +501,12 @@ def render_screen_3() -> None:
             horizontal=False,
         )
 
+        if output_type == "powerbi":
+            st.info(
+                "Power BI export is a work in progress. "
+                "This feature is not available yet."
+            )
+
         dashboard_submitted = st.form_submit_button("Generate Dashboard / Export")
 
     if dashboard_submitted:
@@ -503,8 +543,7 @@ def render_screen_3() -> None:
             st.session_state.python_dashboard_payload = None
             st.session_state.dashboard_generated = True
             st.session_state.dashboard_message = (
-                "Power BI export layer is not connected yet. "
-                "The Python dashboard path works already."
+                "Feature coming soon: Power BI export is still under development. :-)"
             )
             st.rerun()
 
@@ -555,6 +594,8 @@ def render_screen_3() -> None:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 SESSION_TEMP_DIRS.discard(str(temp_dir))
 
+            cleanup_generated_static_maps()
+
             for key in [
                 "screen",
                 "analysis_ready",
@@ -567,7 +608,7 @@ def render_screen_3() -> None:
                 "selected_dashboard_kpis",
                 "selected_dashboard_charts",
                 "selected_business_insight_dashboards",
-                "selected_dashboard_output_type",                    
+                "selected_dashboard_output_type",
                 "session_workdir",
             ]:
                 if key in st.session_state:
@@ -575,14 +616,14 @@ def render_screen_3() -> None:
 
             init_state()
             go_to_screen(1)
-
+            
 # =========================
 # Main app entry point
 # =========================
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     init_state()
-    ensure_static_server(root_dir=".")
+    ensure_one_time_temp_cleanup()
 
     screen = st.session_state.screen
 

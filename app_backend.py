@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import shutil
+
 from src.config import SUPPORTED_DATASETS
 from src.download import download_parquet_file
 from src.preprocess import (
@@ -29,6 +31,14 @@ from src.dashboard import (
 
 ZONES_PATH = Path("data/reference/taxi_zones/taxi_zones.shp")
 
+def copy_map_to_static_generated(source_path: Path, target_name: str) -> Path:
+    static_generated_dir = Path("static/generated")
+    static_generated_dir.mkdir(parents=True, exist_ok=True)
+
+    target_path = static_generated_dir / target_name
+    shutil.copy2(source_path, target_path)
+
+    return target_path
 
 def run_analysis(selection, workdir: str | Path | None = None):
 
@@ -50,8 +60,6 @@ def run_analysis(selection, workdir: str | Path | None = None):
     date_str = f"{year}-{month:02d}-{day:02d}"
 
     zones_path = Path("data/reference/taxi_zones/taxi_zones.shp")
-    output_dir = Path("outputs/maps")
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     parquet_path = download_parquet_file(dataset, year, month, raw_dir=raw_dir)
 
@@ -72,18 +80,28 @@ def run_analysis(selection, workdir: str | Path | None = None):
         daily_summary = load_daily_summary(processed_paths["daily"])
         merged = merge_zones_with_summary(zones, daily_summary)
 
-        daily_map_path = maps_dir / f"daily_multi_metric_map_{dataset}_{date_str}.html"
+        daily_map_filename = f"daily_multi_metric_map_{dataset}_{date_str}.html"
+        daily_map_path = maps_dir / daily_map_filename
+
         create_multi_metric_daily_map(
             zones_gdf=merged,
             output_path=daily_map_path,
             default_metric="pickups",
         )
-        outputs["daily_static"] = str(daily_map_path)
+
+        static_daily_map_path = copy_map_to_static_generated(
+            source_path=daily_map_path,
+            target_name=daily_map_filename,
+        )
+
+        outputs["daily_static"] = str(static_daily_map_path)
 
     if "animated_hourly" in selected_maps:
         hourly_summary = load_hourly_summary(processed_paths["hourly"])
 
-        animated_map_path = maps_dir / f"animated_hourly_multi_metric_{dataset}_{date_str}.html"
+        animated_map_filename = f"animated_hourly_multi_metric_{dataset}_{date_str}.html"
+        animated_map_path = maps_dir / animated_map_filename
+
         create_single_html_animated_metric_map(
             zones=zones,
             hourly_summary=hourly_summary,
@@ -91,7 +109,13 @@ def run_analysis(selection, workdir: str | Path | None = None):
             day_string=date_str,
             default_metric="pickups",
         )
-        outputs["animated_hourly"] = str(animated_map_path)
+
+        static_animated_map_path = copy_map_to_static_generated(
+            source_path=animated_map_path,
+            target_name=animated_map_filename,
+        )
+
+        outputs["animated_hourly"] = str(static_animated_map_path)
 
     return {
         "maps": outputs,

@@ -11,3 +11,6 @@ notes/
 notebooks/_cache/
 notebooks/data/
 notebooks/notebooks/_cache/
+minimal_test.py
+static/generated/*
+!static/generated/.gitkeep
